@@ -23,6 +23,7 @@ function print_help {
     echo "--enable-docker-bridge Restores the docker default bridge network. (default: false)"
     echo "--aws-api-retry-attempts Number of retry attempts for AWS API call (DescribeCluster) (default: 3)"
     echo "--docker-config-json The contents of the /etc/docker/daemon.json file. Useful if you want a custom config differing from the default one in the AMI"
+    echo "--associate-eip-pool Wether to assign an EIP from a given pool to this instance"
 }
 
 POSITIONAL=()
@@ -66,6 +67,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --docker-config-json)
             DOCKER_CONFIG_JSON=$2
+            shift
+            shift
+            ;;
+        --associate-eip-pool)
+            EIP_POOL_TAG=${2:-"eks/eip-pool"}
             shift
             shift
             ;;
@@ -133,6 +139,21 @@ fi
 PAUSE_CONTAINER_ACCOUNT=$(get_pause_container_account_for_region "${AWS_DEFAULT_REGION}")
 PAUSE_CONTAINER_IMAGE=${PAUSE_CONTAINER_IMAGE:-$PAUSE_CONTAINER_ACCOUNT.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/eks/pause-${ARCH}}
 PAUSE_CONTAINER="$PAUSE_CONTAINER_IMAGE:$PAUSE_CONTAINER_VERSION"
+
+### assign EIP from available pool
+
+if [[ -z $EIP_POOL_TAG ]]; then
+    echo ""
+else
+    EC2_INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+    EIP_ALLOCATION_ID=$(aws ec2 describe-addresses --region $AWS_DEFAULT_REGION --filters Name=tag-key,Values=$EIP_POOL_TAG --query "Addresses[?AssociationId == null].AllocationId" --output text | awk -F' ' '{print $1}')
+    if [[ -z $EC2_INSTANCE_ID ]] && [[ -z $EIP_ALLOCATION_ID ]]; then
+        echo "Could not obtain instance id or available eip from pool $EIP_POOL_TAG"
+    else
+        aws ec2 associate-address --region $AWS_DEFAULT_REGION --instance-id $EC2_INSTANCE_ID --allocation-id $EIP_ALLOCATION_ID
+        echo "Associated eip from pool $EIP_POOL_TAG to instance"
+    fi
+fi
 
 ### kubelet kubeconfig
 
